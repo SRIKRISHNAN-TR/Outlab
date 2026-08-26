@@ -1,14 +1,17 @@
 {
   "name": "backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "src/index.ts",
   "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "ReachInbox Email Scheduler API",
   "dependencies": {
     "@prisma/client": "^7.9.1",
     "bullmq": "^6.2.0",
@@ -16,18 +19,24 @@
     "csv-parse": "^7.0.2",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "express-session": "^1.18.1",
     "google-auth-library": "^11.0.2",
     "ioredis": "^6.0.0",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.5",
+    "pg": "^8.16.0",
+    "uuid": "^11.1.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/express-session": "^1.18.1",
     "@types/multer": "^2.2.0",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.3.0",
     "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.11.14",
+    "@types/uuid": "^10.0.0",
     "prisma": "^7.9.1",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
