@@ -25,4 +25,14 @@ export const emailsApi = {
     const res = await apiClient.post<EmailRecord>("/api/emails/schedule", input);
     return res.data;
   },
+
+  /** Update a scheduled email */
+  async update(id: string, input: Partial<ScheduleEmailInput>): Promise<void> {
+    await apiClient.put(`/api/emails/${id}`, input);
+  },
+
+  /** Delete / cancel a scheduled email */
+  async delete(id: string): Promise<void> {
+    await apiClient.delete(`/api/emails/${id}`);
+  },
 };

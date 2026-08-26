@@ -9,6 +9,7 @@ export interface EmailRecord {
   sentAt?: string | null;
   status: EmailStatus;
   error?: string | null;
+  previewUrl?: string | null;
   openRate?: number;
 }
 

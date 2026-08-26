@@ -29,7 +29,8 @@ router.get("/", requireAuth, async (req: Request, res: Response) => {
          se.scheduled_at AS "scheduledAt",
          se.sent_at       AS "sentAt",
          se.status,
-         se.error_message AS error
+         se.error_message AS error,
+         se.preview_url   AS "previewUrl"
        FROM scheduled_emails se
        JOIN email_campaigns ec ON ec.id = se.campaign_id
        JOIN (
@@ -37,15 +38,13 @@ router.get("/", requireAuth, async (req: Request, res: Response) => {
          FROM scheduled_emails
        ) se2 ON se2.campaign_id = se.campaign_id
        WHERE ec.user_id = $1
-       GROUP BY se.id, ec.subject, ec.body, se.scheduled_at, se.sent_at, se.status, se.error_message
+       GROUP BY se.id, ec.subject, ec.body, se.scheduled_at, se.sent_at, se.status, se.error_message, se.preview_url
        ORDER BY se.scheduled_at DESC
        LIMIT 200`,
       [userId]
     );
 
-    // Map to frontend EmailRecord shape
-    const emails = result.rows.map(mapRow);
-    res.json(emails);
+    res.json(result.rows.map(mapRow));
   } catch (err) {
     console.error("GET /api/emails error:", err);
     res.status(500).json({ error: "Failed to fetch emails" });
@@ -67,13 +66,14 @@ router.get("/scheduled", requireAuth, async (req: Request, res: Response) => {
          MIN(se.scheduled_at) AS "scheduledAt",
          NULL::timestamptz  AS "sentAt",
          se.status,
-         se.error_message AS error
+         se.error_message AS error,
+         se.preview_url   AS "previewUrl"
        FROM scheduled_emails se
        JOIN email_campaigns ec ON ec.id = se.campaign_id
        JOIN scheduled_emails se2 ON se2.campaign_id = se.campaign_id
        WHERE ec.user_id = $1
          AND se.status IN ('scheduled', 'processing')
-       GROUP BY se.id, ec.subject, ec.body, se.status, se.error_message
+       GROUP BY se.id, ec.subject, ec.body, se.status, se.error_message, se.preview_url
        ORDER BY "scheduledAt" ASC`,
       [userId]
     );
@@ -99,13 +99,14 @@ router.get("/sent", requireAuth, async (req: Request, res: Response) => {
          MIN(se.scheduled_at) AS "scheduledAt",
          MAX(se.sent_at)      AS "sentAt",
          se.status,
-         se.error_message AS error
+         se.error_message AS error,
+         se.preview_url   AS "previewUrl"
        FROM scheduled_emails se
        JOIN email_campaigns ec ON ec.id = se.campaign_id
        JOIN scheduled_emails se2 ON se2.campaign_id = se.campaign_id
        WHERE ec.user_id = $1
          AND se.status IN ('sent', 'failed')
-       GROUP BY se.id, ec.subject, ec.body, se.status, se.error_message
+       GROUP BY se.id, ec.subject, ec.body, se.status, se.error_message, se.preview_url
        ORDER BY "sentAt" DESC NULLS LAST`,
       [userId]
     );
@@ -151,7 +152,6 @@ router.post("/schedule", requireAuth, async (req: Request, res: Response) => {
     let senderId: string;
 
     if (senderRes.rows.length === 0) {
-      // Create an Ethereal sender for this user
       const newSender = await db.query(
         `INSERT INTO senders (user_id, email, display_name, smtp_host, smtp_port, smtp_user, smtp_password)
          VALUES ($1, $2, $3, 'smtp.ethereal.email', 587, $4, $5)
@@ -172,7 +172,7 @@ router.post("/schedule", requireAuth, async (req: Request, res: Response) => {
     );
     const campaignId = campaignRes.rows[0].id;
 
-    // 3. Create one scheduled_email per recipient and enqueue BullMQ jobs
+    // 3. Create scheduled_emails and enqueue BullMQ jobs
     const startTime = new Date(scheduledAt).getTime();
     const jobRecords = [];
 
@@ -180,7 +180,7 @@ router.post("/schedule", requireAuth, async (req: Request, res: Response) => {
       const recipientEmail = recipients[i];
       const jobScheduledAt = new Date(startTime + i * delaySeconds * 1000);
       const delay = Math.max(0, jobScheduledAt.getTime() - Date.now());
-      const idempotencyKey = `${campaignId}:${recipientEmail}`;
+      const idempotencyKey = `${campaignId}_${recipientEmail}`;
 
       const emailRes = await db.query(
         `INSERT INTO scheduled_emails
@@ -191,21 +191,19 @@ router.post("/schedule", requireAuth, async (req: Request, res: Response) => {
         [campaignId, senderId, recipientEmail, subject, body, jobScheduledAt.toISOString(), idempotencyKey]
       );
 
-      if (emailRes.rows.length === 0) continue; // duplicate skipped
+      if (emailRes.rows.length === 0) continue;
 
       const scheduledEmailId = emailRes.rows[0].id;
 
-      // Enqueue in BullMQ with the delay
       const job = await emailQueue.add(
         "send-email",
         { scheduledEmailId, to: recipientEmail, subject, body },
         {
           delay,
-          jobId: idempotencyKey, // deduplication key
+          jobId: idempotencyKey,
         }
       );
 
-      // Store BullMQ job ID
       await db.query(
         `UPDATE scheduled_emails SET bullmq_job_id = $1 WHERE id = $2`,
         [job.id, scheduledEmailId]
@@ -214,7 +212,6 @@ router.post("/schedule", requireAuth, async (req: Request, res: Response) => {
       jobRecords.push({ id: scheduledEmailId, to: recipientEmail });
     }
 
-    // Return a summary EmailRecord for the frontend
     const response = {
       id: campaignId,
       subject,
@@ -232,10 +229,153 @@ router.post("/schedule", requireAuth, async (req: Request, res: Response) => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// PUT /api/emails/:id — update a scheduled email
+// ────────────────────────────────────────────────────────────────────────────
+const updateSchema = z.object({
+  subject: z.string().min(1).optional(),
+  body: z.string().min(1).optional(),
+  scheduledAt: z.string().datetime().optional(),
+});
+
+router.put("/:id", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req.session as any).user.id;
+  const { id } = req.params;
+
+  const parse = updateSchema.safeParse(req.body);
+  if (!parse.success) {
+    return res.status(400).json({ error: "Invalid request", details: parse.error.flatten() });
+  }
+
+  try {
+    // Verify email belongs to user & is still scheduled
+    const findRes = await db.query(
+      `SELECT se.id, se.bullmq_job_id, se.campaign_id, se.recipient_email, se.status
+       FROM scheduled_emails se
+       JOIN email_campaigns ec ON ec.id = se.campaign_id
+       WHERE (se.id = $1 OR se.campaign_id = $1) AND ec.user_id = $2`,
+      [id, userId]
+    );
+
+    if (findRes.rows.length === 0) {
+      return res.status(404).json({ error: "Email not found or access denied" });
+    }
+
+    const emailRow = findRes.rows[0];
+    if (emailRow.status !== "scheduled") {
+      return res.status(400).json({ error: "Only pending scheduled emails can be updated" });
+    }
+
+    const { subject, body, scheduledAt } = parse.data;
+
+    // 1. Update Campaign & Email records
+    if (subject || body) {
+      await db.query(
+        `UPDATE email_campaigns
+         SET subject = COALESCE($1, subject),
+             body    = COALESCE($2, body)
+         WHERE id = $3`,
+        [subject ?? null, body ?? null, emailRow.campaign_id]
+      );
+
+      await db.query(
+        `UPDATE scheduled_emails
+         SET subject = COALESCE($1, subject),
+             body    = COALESCE($2, body),
+             updated_at = now()
+         WHERE campaign_id = $3`,
+        [subject ?? null, body ?? null, emailRow.campaign_id]
+      );
+    }
+
+    if (scheduledAt) {
+      const newScheduledDate = new Date(scheduledAt);
+      const delay = Math.max(0, newScheduledDate.getTime() - Date.now());
+
+      await db.query(
+        `UPDATE scheduled_emails
+         SET scheduled_at = $1, updated_at = now()
+         WHERE campaign_id = $2`,
+        [newScheduledDate.toISOString(), emailRow.campaign_id]
+      );
+
+      // Reschedule BullMQ job if job ID exists
+      if (emailRow.bullmq_job_id) {
+        const job = await emailQueue.getJob(emailRow.bullmq_job_id);
+        if (job) {
+          await job.remove();
+          const newJob = await emailQueue.add(
+            "send-email",
+            {
+              scheduledEmailId: emailRow.id,
+              to: emailRow.recipient_email,
+              subject: subject ?? emailRow.subject,
+              body: body ?? emailRow.body,
+            },
+            { delay, jobId: emailRow.bullmq_job_id.replace(/:/g, "_") }
+          );
+          await db.query(
+            `UPDATE scheduled_emails SET bullmq_job_id = $1 WHERE id = $2`,
+            [newJob.id, emailRow.id]
+          );
+        }
+      }
+    }
+
+    res.json({ message: "Scheduled email updated successfully" });
+  } catch (err) {
+    console.error("PUT /api/emails/:id error:", err);
+    res.status(500).json({ error: "Failed to update email" });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// DELETE /api/emails/:id — cancel & delete a scheduled email
+// ────────────────────────────────────────────────────────────────────────────
+router.delete("/:id", requireAuth, async (req: Request, res: Response) => {
+  const userId = (req.session as any).user.id;
+  const { id } = req.params;
+
+  try {
+    // Verify email belongs to user
+    const findRes = await db.query(
+      `SELECT se.id, se.bullmq_job_id, se.campaign_id, se.status
+       FROM scheduled_emails se
+       JOIN email_campaigns ec ON ec.id = se.campaign_id
+       WHERE (se.id = $1 OR se.campaign_id = $1) AND ec.user_id = $2`,
+      [id, userId]
+    );
+
+    if (findRes.rows.length === 0) {
+      return res.status(404).json({ error: "Email not found or access denied" });
+    }
+
+    for (const row of findRes.rows) {
+      // Remove BullMQ job if pending
+      if (row.bullmq_job_id) {
+        try {
+          const job = await emailQueue.getJob(row.bullmq_job_id);
+          if (job) await job.remove();
+        } catch (e) {
+          // ignore if job already completed/removed
+        }
+      }
+    }
+
+    // Delete record from DB
+    await db.query(`DELETE FROM scheduled_emails WHERE id = $1 OR campaign_id = $1`, [id]);
+    await db.query(`DELETE FROM email_campaigns WHERE id = $1`, [id]);
+
+    res.json({ message: "Scheduled email deleted successfully" });
+  } catch (err) {
+    console.error("DELETE /api/emails/:id error:", err);
+    res.status(500).json({ error: "Failed to delete email" });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // Helper: map a DB row to the frontend EmailRecord shape
 // ────────────────────────────────────────────────────────────────────────────
 function mapRow(row: any) {
-  // Map DB status values to frontend-expected values
   const statusMap: Record<string, string> = {
     processing: "sending",
     scheduled: "scheduled",
@@ -252,6 +392,7 @@ function mapRow(row: any) {
     sentAt: row.sentAt ?? null,
     status: statusMap[row.status] ?? row.status,
     error: row.error ?? null,
+    previewUrl: row.previewUrl ?? null,
   };
 }
 

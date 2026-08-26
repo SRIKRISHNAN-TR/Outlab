@@ -49,15 +49,19 @@ async function processEmailJob(job: Job<EmailJobData>): Promise<void> {
     // Send the email via Ethereal SMTP
     const previewUrl = await sendEmail({ to, subject, text: body });
 
-    // Mark as sent
+    // Mark as sent (store Ethereal preview URL)
     await db.query(
       `UPDATE scheduled_emails
-       SET status = 'sent', sent_at = now(), updated_at = now()
+       SET status = 'sent', sent_at = now(), updated_at = now(),
+           preview_url = $2
        WHERE id = $1`,
-      [scheduledEmailId]
+      [scheduledEmailId, previewUrl]
     );
 
-    console.log(`✅  Sent to ${to} — preview: ${previewUrl}`);
+    console.log(`\n📨  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`✅  Email sent   → ${to}`);
+    console.log(`🔗  Preview URL  → ${previewUrl}`);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
   } catch (err: any) {
     const errMsg = err?.message ?? "Unknown error";
     console.error(`❌  Failed to send to ${to}:`, errMsg);
