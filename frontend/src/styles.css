@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: hsl(224 71% 4%);
+  --color-foreground: hsl(213 31% 91%);
+  --color-card: hsl(224 71% 4%);
+  --color-card-foreground: hsl(213 31% 91%);
+  --color-popover: hsl(224 71% 4%);
+  --color-popover-foreground: hsl(215 20.2% 65.1%);
+  --color-primary: hsl(210 40% 98%);
+  --color-primary-foreground: hsl(222.2 47.4% 1.2%);
+  --color-secondary: hsl(222.2 47.4% 11.2%);
+  --color-secondary-foreground: hsl(210 40% 98%);
+  --color-muted: hsl(223 47% 11%);
+  --color-muted-foreground: hsl(215.4 16.3% 56.9%);
+  --color-accent: hsl(216 34% 17%);
+  --color-accent-foreground: hsl(210 40% 98%);
+  --color-destructive: hsl(0 63% 31%);
+  --color-destructive-foreground: hsl(210 40% 98%);
+  --color-border: hsl(216 34% 17%);
+  --color-input: hsl(216 34% 17%);
+  --color-ring: hsl(216 34% 17%);
+  --color-surface: hsl(224 71% 6%);
+  --color-sidebar: hsl(224 71% 5%);
+  --color-sidebar-foreground: hsl(213 31% 91%);
+  --color-sidebar-accent: hsl(216 34% 17%);
+  --color-sidebar-accent-foreground: hsl(210 40% 98%);
+  --color-info: hsl(210 100% 66%);
+  --color-success: hsl(142 76% 56%);
+  --color-warning: hsl(37 91% 55%);
+  --color-warning-foreground: hsl(224 71% 4%);
+  --radius: 0.5rem;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
