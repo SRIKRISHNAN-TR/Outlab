@@ -5,9 +5,16 @@ import session from "express-session";
 import authRoutes from "./routes/auth";
 import emailRoutes from "./routes/emails";
 import { startWorker } from "./queue/emailWorker";
+import { db, initDb } from "./db";
 
 const app = express();
 const PORT = parseInt(process.env.PORT ?? "5000", 10);
+
+// Trust Render reverse proxy for secure HTTPS cookies
+app.set("trust proxy", 1);
+
+// Initialize DB schema
+initDb();
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:5173";
 
 // ─── CORS ───────────────────────────────────────────────────────────────────
@@ -41,7 +48,11 @@ app.use(
 app.use("/api/auth", authRoutes);
 app.use("/api/emails", emailRoutes);
 
-// Health check
+// Root & Health check
+app.get("/", (_req, res) => {
+  res.json({ message: "ReachInbox Scheduler API is running 🚀", status: "ok" });
+});
+
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
