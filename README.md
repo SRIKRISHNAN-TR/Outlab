@@ -174,8 +174,3 @@ Sent email preview links are automatically logged to the backend console:
 You can click any logged link to view the delivered email in the Ethereal online inbox.
 
 ---
-
-## 👥 Repository Access
-Access has been granted to:
-- `@Mitrajit`
-- `@Yadav036`
